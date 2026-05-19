@@ -82,6 +82,49 @@ The report will be saved to `reports/dena_report_YYYY-MM-DD.md`.
 Start → NewsAPI (last 7 days) → Format articles → OpenAI Report → Save as .md
 ```
 
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    dena Report Agent                     │
+│                      main.py                            │
+└─────────────────────────────────────────────────────────┘
+                           │
+              ┌────────────▼────────────┐
+              │   industries.yaml       │
+              │   (industry config)     │
+              └────────────┬────────────┘
+                           │
+           ┌───────────────┼───────────────┐
+           │                               │
+┌──────────▼──────────┐       ┌────────────▼────────────┐
+│   Tool 1: NewsAPI   │       │ Tool 2: Tagesschau RSS   │
+│  newsapi.org/v2/    │       │ tagesschau.de/xml/rss2/  │
+│  - keyword query    │       │ - keyword filter         │
+│  - last 7 days      │       │ - no API key required    │
+│  - retry logic      │       │ - public feed            │
+└──────────┬──────────┘       └────────────┬────────────┘
+           │                               │
+           └───────────────┬───────────────┘
+                           │
+              ┌────────────▼────────────┐
+              │  merge_and_deduplicate  │
+              │  format_for_prompt      │
+              └────────────┬────────────┘
+                           │
+              ┌────────────▼────────────┐
+              │  LangChain + GPT-4o-mini│
+              │  - SystemMessage        │
+              │  - structured prompt    │
+              │  - retry logic          │
+              └────────────┬────────────┘
+                           │
+              ┌────────────▼────────────┐
+              │  reports/<topic>_       │
+              │  report_YYYY-MM-DD.md   │
+              └─────────────────────────┘
+```
+
 ## Project Structure
 
 ```

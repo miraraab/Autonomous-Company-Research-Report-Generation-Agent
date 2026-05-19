@@ -5,10 +5,12 @@ Sammle wöchentlich aktuelle Nachrichten über die Deutsche Energie-Agentur (den
 Tools
 
 NewsAPI – Rufe Artikel der letzten 7 Tage ab (Query: "dena Energiewende", Sprache: Deutsch)
+Tagesschau RSS – Public broadcaster feed, no API key required
 OpenAI (GPT-4o-mini via LangChain) – Generiere einen strukturierten Report aus den Artikeln
 
 Workflow
 
+Load industry config from industries.yaml
 Artikel der letzten 7 Tage von NewsAPI abrufen
 Artikel formatieren und zusammenführen
 Report mit OpenAI generieren (Zusammenfassung, Themen, Ausblick)
@@ -28,3 +30,11 @@ Fehlerbehandlung
 Leere API-Antwort → Exception mit Hinweis
 HTTP-Fehler → Status-Code und Meldung ausgeben
 Kein API Key → dotenv wirft Fehler beim Start
+
+Industries
+
+energiewende – dena & Energiewende (default)
+gebaeude – Gebäude & Räume umbauen
+energie_erzeugen – Energie erzeugen & verteilen
+digitalisierung – Digitalisierung & Innovation
+wirtschaft – Wirtschaft transformieren
