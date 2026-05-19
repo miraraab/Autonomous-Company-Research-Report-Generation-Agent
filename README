@@ -38,10 +38,10 @@ pip install -r requirements.txt
 ### Run the agent
 
 ```bash
-# Default (Energiewende)
+# Default (Energy transition)
 python main.py
 
-# Specific dena topic
+# Specific industry
 python main.py --industry energiewende
 python main.py --industry gebaeude
 python main.py --industry energie_erzeugen
@@ -53,11 +53,11 @@ python main.py --industry wirtschaft
 
 | Key | Topic |
 |-----|-------|
-| `energiewende` | dena & Energiewende (default) |
-| `gebaeude` | Gebäude & Räume umbauen |
-| `energie_erzeugen` | Energie erzeugen & verteilen |
-| `digitalisierung` | Digitalisierung & Innovation |
-| `wirtschaft` | Wirtschaft transformieren |
+| `energiewende` | dena & Energy transition (default) |
+| `gebaeude` | Buildings & retrofit spaces |
+| `energie_erzeugen` | Generate & distribute energy |
+| `digitalisierung` | Digitalization & Innovation |
+| `wirtschaft` | Transform economy |
 
 ### Output
 
