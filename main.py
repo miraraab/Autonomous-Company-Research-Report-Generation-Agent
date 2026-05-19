@@ -110,9 +110,13 @@ def fetch_with_retry(url: str, params: dict, source_name: str) -> requests.Respo
 
 # ── Article filtering ──────────────────────────────────────────────────────────
 def is_relevant(article: dict, keywords: list[str]) -> bool:
-    """Check if any keyword appears in the combined title + description text."""
+    """Check if any keyword word appears in the combined title + description text."""
     combined_text = (article.get("title", "") + " " + article.get("description", "")).lower()
-    return any(keyword.lower() in combined_text for keyword in keywords)
+    # Split keywords into individual words for flexible matching
+    words = []
+    for kw in keywords:
+        words.extend(kw.lower().split())
+    return any(word in combined_text for word in words)
 
 
 # ── Tool 1: NewsAPI ────────────────────────────────────────────────────────────
@@ -155,7 +159,7 @@ def fetch_newsapi_articles(query: str = '"erneuerbare Energien" OR "Energiewende
         if art.get("title") and "[Removed]" not in art.get("title", "")
     ]
 
-    keywords = ["erneuerbare Energien", "Energiewende", "dena"]
+    keywords = ["Energie", "Solar", "Wind", "Klimaschutz", "dena"]  # Broad energy-related keywords
     articles = [art for art in articles if is_relevant(art, keywords)]
 
     log.info("NewsAPI – %d articles retrieved.", len(articles))
