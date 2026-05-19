@@ -12,9 +12,12 @@ import os
 import time
 import logging
 import argparse
+import base64
 import yaml
 import feedparser
 import requests
+import openai
+import resend
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
@@ -29,7 +32,7 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 # ── Config ─────────────────────────────────────────────────────────────────────
-load_dotenv()
+load_dotenv(override=True)
 
 NEWSAPI_KEY    = os.getenv("NEWSAPI_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -306,6 +309,51 @@ def save_report(report_text: str, topic: str = "energiewende") -> str:
     log.info("Report saved → %s", filename)
     return filename
 
+def generate_audio(report_text: str, report_path: str) -> str:
+    """Convert report text to MP3 audio via OpenAI TTS."""
+    client = openai.OpenAI(api_key=OPENAI_API_KEY)
+    
+    # Trim to ~4000 chars (approx 7 minutes spoken)
+    audio_input = report_text[:4000]
+    
+    response = client.audio.speech.create(
+        model="tts-1",
+        voice="onyx",
+        input=audio_input,
+    )
+    
+    audio_path = report_path.replace(".md", ".mp3")
+    response.stream_to_file(audio_path)
+    log.info("Audio saved → %s", audio_path)
+    return audio_path
+
+
+def send_email(audio_path: str, report_topic: str) -> None:
+    """Send audio report via Resend."""
+    resend.api_key = os.getenv("RESEND_API_KEY", "").strip()
+    log.info("Resend Key geladen: %s...", resend.api_key[:8])
+    recipient = os.getenv("RECIPIENT_EMAIL")
+    
+    if not resend.api_key or not recipient:
+        log.warning("Resend not configured – skipping email.")
+        return
+    
+    with open(audio_path, "rb") as f:
+        audio_bytes = f.read()
+    
+    resend.Emails.send({
+        "from": "onboarding@resend.dev",
+        "to": recipient,
+        "subject": f"dena Audio Report – {datetime.now().strftime('%d.%m.%Y')} – {report_topic}",
+        "html": f"<p>Dein wöchentlicher dena Report als Audio-Datei.</p><p>Thema: {report_topic}</p>",
+        "attachments": [{
+            "filename": audio_path.split("/")[-1],
+            "content": base64.b64encode(audio_bytes).decode("utf-8"),
+        }],
+    })
+    log.info("Email sent → %s", recipient)
+
+
 
 # ── Orchestration ──────────────────────────────────────────────────────────────
 def run_agent(
@@ -347,6 +395,12 @@ def run_agent(
 
     # Step 5 – save
     filepath = save_report(report, topic=report_topic)
+
+    # Step 6 – audio generation
+    audio_path = generate_audio(report, filepath)
+
+    # Step 7 – email delivery
+    send_email(audio_path, report_topic)
 
     log.info("═══ Agent finished → %s ═══", filepath)
 
