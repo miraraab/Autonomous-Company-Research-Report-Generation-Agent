@@ -393,10 +393,31 @@ def run_agent(
         raise RuntimeError("No articles retrieved from either source. Cannot generate report.")
 
     all_articles = merge_and_deduplicate(newsapi_articles, tagesschau_articles)
+    
+    # Agent decision: evaluate source quality
+    if len(all_articles) < 3:
+        log.warning("Agent: insufficient articles (%d). Retrying NewsAPI with broader query...", len(all_articles))
+        fallback_articles = fetch_newsapi_articles(query="Energie OR Klimaschutz OR Deutschland")
+        all_articles = merge_and_deduplicate(all_articles, fallback_articles)
+
+    if len(all_articles) == 0:
+        raise RuntimeError("Agent: no articles from any source after fallback. Aborting.")
+
+    log.info("Agent decision: proceeding with %d articles from %d sources",
+             len(all_articles),
+             len(set(a['origin'] for a in all_articles)))
+
     articles_text = format_articles_for_prompt(all_articles)
 
     # Step 4 – report generation
     report = generate_report(articles_text, topic=report_topic)
+
+    # Agent decision: validate report completeness after generation
+    required_sections = ["Zusammenfassung", "Kernthemen", "Trends", "Risiken", "Ausblick"]
+    missing = [s for s in required_sections if s not in report]
+    if missing:
+        log.warning("Agent: report incomplete, missing sections: %s. Regenerating...", missing)
+        report = generate_report(articles_text, topic=report_topic)
 
     # Step 5 – save
     filepath = save_report(report, topic=report_topic)

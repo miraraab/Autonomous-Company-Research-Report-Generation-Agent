@@ -79,7 +79,29 @@ The report will be saved to `reports/dena_report_YYYY-MM-DD.md`.
 ## Workflow
 
 ```
-Start → NewsAPI (last 7 days) → Format articles → OpenAI Report → Save as .md
+Trigger (python main.py --industry <topic>)
+↓
+Load industry config from industries.yaml
+↓
+Tool 1: NewsAPI (keyword query, last 7 days)
+Tool 2: Tagesschau RSS (keyword filter, no key required)
+↓
+Agent Decision Layer:
+
+< 3 articles? → retry with broader query
+0 articles? → abort with error
+log article count and source count
+↓
+LangChain + GPT-4o-mini → structured German report
+↓
+Validate report sections (Zusammenfassung, Kernthemen, Trends, Risiken, Ausblick)
+missing sections? → regenerate
+↓
+Save Markdown report → reports/<topic>_report_YYYY-MM-DD.md
+↓
+OpenAI TTS → MP3 audio (speed 1.25x, voice onyx)
+↓
+Resend API → email with MP3 attachment
 ```
 
 ## Architecture
@@ -129,12 +151,14 @@ Start → NewsAPI (last 7 days) → Format articles → OpenAI Report → Save a
 
 ```
 dena-agent/
-├── main.py           # Main agent
+├── main.py               # Autonomous agent
+├── industries.yaml       # Industry configs (5 dena topics)
 ├── requirements.txt
-├── .env              # Do not commit!
-├── reports/          # Generated reports
+├── .env                  # Do not commit!
+├── .env.example
+├── reports/              # Generated reports + audio
 ├── docs/
-│   └── stories.md    # Agile planning
+│   └── stories.md        # Agile planning
 ├── skills/
 │   └── report_generation.md
 └── AGENTS.md

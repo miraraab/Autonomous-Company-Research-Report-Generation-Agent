@@ -16,7 +16,7 @@ Generiert einen strukturierten deutschen Energiewende-Report aus rohen Nachricht
 - Struktur vorgegeben via Markdown-Headings im Prompt
 
 ## Modell
-- gpt-3.5-turbo (kostengünstig, ausreichend für strukturierte Reports)
+- gpt-4o-mini (cost-efficient, strong structured output quality)
 
 ## APIs Used
 - NewsAPI: fetches German-language articles (last 7 days)
@@ -26,3 +26,20 @@ Generiert einen strukturierten deutschen Energiewende-Report aus rohen Nachricht
 Called in main.py inside generate_report(). 
 Input comes from format_articles_for_prompt().
 Output is saved via save_report() to reports/.
+
+
+## Decision Layer
+Before calling the LLM, the agent validates:
+- Minimum 3 articles available (fallback query if not met)
+- At least 1 source active
+
+After generation, the agent validates:
+- All 5 required sections present: Zusammenfassung, Kernthemen, Trends, Risiken, Ausblick
+- Regenerates once if any section is missing
+
+## Audio Output
+- Model: OpenAI TTS tts-1
+- Voice: onyx
+- Speed: 1.25x
+- Format: MP3
+- Input: first 4000 characters of report
