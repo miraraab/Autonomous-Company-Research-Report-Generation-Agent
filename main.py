@@ -11,6 +11,8 @@ Output:   Structured Markdown report saved to reports/
 import os
 import time
 import logging
+import argparse
+import yaml
 import feedparser
 import requests
 from datetime import datetime, timedelta
@@ -49,6 +51,18 @@ def validate_env() -> None:
             f"Missing environment variables: {', '.join(missing)}\n"
             "Copy .env.example to .env and fill in your API keys."
         )
+
+
+def load_industry(key: str) -> dict:
+    """Load industry config from industries.yaml."""
+    with open("industries.yaml", "r", encoding="utf-8") as f:
+        industries = yaml.safe_load(f)
+    if key not in industries:
+        available = ", ".join(industries.keys())
+        raise ValueError(f"Unknown industry '{key}'. Available: {available}")
+    cfg = industries[key]
+    log.info("Industry loaded: %s", cfg["label"])
+    return cfg
 
 
 # ── Retry helper ───────────────────────────────────────────────────────────────
@@ -146,14 +160,11 @@ def fetch_newsapi_articles(query: str = '"erneuerbare Energien" OR "Energiewende
 
 
 # ── Tool 2: Tagesschau RSS ─────────────────────────────────────────────────────
-def fetch_tagesschau_articles(keywords: list[str] = None) -> list[dict]:
+def fetch_tagesschau_articles(keywords: list = None) -> list[dict]:
     """
     Fetch relevant entries from the Tagesschau public RSS feed.
     Filters by keywords (case-insensitive). No API key required.
     """
-    if keywords is None:
-        keywords = ["Energie", "Solar", "Wind", "Klimaschutz", "dena"]
-
     log.info("Tool 2 – Tagesschau RSS: fetching feed …")
     feed = feedparser.parse(TAGESSCHAU_RSS)
 
@@ -161,18 +172,20 @@ def fetch_tagesschau_articles(keywords: list[str] = None) -> list[dict]:
         log.error("Tagesschau RSS – feed parse error: %s", feed.bozo_exception)
         return []
 
+    keywords = keywords or ["Energie"]
     matched = []
     for entry in feed.entries:
-        article = {
-            "source":      "Tagesschau",
-            "title":       entry.get("title", ""),
-            "description": entry.get("summary", ""),
-            "published":   entry.get("published", "")[:10],
-            "url":         entry.get("link", ""),
-            "origin":      "Tagesschau RSS",
-        }
-        if is_relevant(article, keywords):
-            matched.append(article)
+        title   = entry.get("title", "")
+        summary = entry.get("summary", "")
+        if any(kw.lower() in title.lower() or kw.lower() in summary.lower() for kw in keywords):
+            matched.append({
+                "source":      "Tagesschau",
+                "title":       title,
+                "description": summary,
+                "published":   entry.get("published", "")[:10],
+                "url":         entry.get("link", ""),
+                "origin":      "Tagesschau RSS",
+            })
         if len(matched) >= MAX_ARTICLES:
             break
 
@@ -297,8 +310,8 @@ def save_report(report_text: str, topic: str = "energiewende") -> str:
 # ── Orchestration ──────────────────────────────────────────────────────────────
 def run_agent(
     newsapi_query: str = '"erneuerbare Energien" OR "Energiewende" OR "dena"',
-    rss_keywords:  list[str] = None,
-    report_topic:  str = "dena & Energiewende",
+    rss_keywords: list = None,
+    report_topic: str = "dena & Energiewende",
 ) -> str:
     """
     Full autonomous pipeline:
@@ -310,9 +323,6 @@ def run_agent(
       6. Save report to disk
     Returns the path to the saved report file.
     """
-    if rss_keywords is None:
-        rss_keywords = ["Energie", "Solar", "Wind", "Klimaschutz", "dena"]
-
     log.info("═══ Agent started ═══")
 
     # Step 0 – environment check
@@ -322,6 +332,7 @@ def run_agent(
     newsapi_articles = fetch_newsapi_articles(query=newsapi_query)
 
     # Step 2 – Tool 2: Tagesschau RSS
+    rss_keywords = rss_keywords or ["Energie"]
     tagesschau_articles = fetch_tagesschau_articles(keywords=rss_keywords)
 
     # Step 3 – merge
@@ -349,8 +360,16 @@ def run_agent(
 
 # ── Entry point ────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Autonomous Energy Research Agent")
+    parser.add_argument(
+        "--industry",
+        default="energiewende",
+        help="Industry key from industries.yaml (default: energiewende)"
+    )
+    args = parser.parse_args()
+    cfg = load_industry(args.industry)
     run_agent(
-        newsapi_query='"erneuerbare Energien" OR "Energiewende" OR "dena"',
-        rss_keywords=["Energie", "Solar", "Wind", "Klimaschutz", "dena"],
-        report_topic="dena & Energiewende",
+        newsapi_query=cfg["newsapi_query"],
+        rss_keywords=cfg["rss_keywords"],
+        report_topic=cfg["report_topic"],
     )

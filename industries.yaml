@@ -1,0 +1,38 @@
+# industries.yaml
+# Add or edit industries here without touching main.py
+# Run with: python main.py --industry <key>
+
+energiewende:
+  label: "dena & Energiewende"
+  newsapi_query: '"erneuerbare Energien" OR "Energiewende" OR "dena"'
+  rss_keywords: ["Energie", "Solar", "Wind", "Klimaschutz", "dena"]
+  rss_keyword_filter: "Energie"
+  report_topic: "dena & Energiewende"
+
+gebaeude:
+  label: "Gebäude & Räume umbauen"
+  newsapi_query: '"Gebäudesanierung" OR "Klimaneutralität Gebäude" OR "Wärmedämmung" OR "Quartier Energie"'
+  rss_keywords: ["Gebäude", "Sanierung", "Wärme", "Fernwärme", "Kommune", "Klimaneutral"]
+  rss_keyword_filter: "Gebäude"
+  report_topic: "Gebäude & Räume umbauen – Transformation zum klimaneutralen Gebäudesektor"
+
+energie_erzeugen:
+  label: "Energie erzeugen & verteilen"
+  newsapi_query: '"erneuerbare Energien" OR "Stromspeicher" OR "Fernwärme" OR "Versorgungssicherheit"'
+  rss_keywords: ["Strom", "Speicher", "Fernwärme", "Netz", "Versorgung", "Dekarbonisierung"]
+  rss_keyword_filter: "Strom"
+  report_topic: "Energie erzeugen & verteilen – Klimaneutrales Energiesystem"
+
+digitalisierung:
+  label: "Digitalisierung & Innovation"
+  newsapi_query: '"Energiesystem Digitalisierung" OR "Smart Grid" OR "Datengovernance Energie" OR "Energieinnovation"'
+  rss_keywords: ["Digitalisierung", "Smart", "Daten", "Innovation", "KI Energie", "Steuerung"]
+  rss_keyword_filter: "Digital"
+  report_topic: "Digitalisierung & Innovation – Steuerung des dezentralen Energiesystems"
+
+wirtschaft:
+  label: "Wirtschaft transformieren"
+  newsapi_query: '"Dekarbonisierung Industrie" OR "klimaneutrale Wirtschaft" OR "Wettbewerbsfähigkeit Energie"'
+  rss_keywords: ["Industrie", "Dekarbonisierung", "Wasserstoff", "Mobilität", "Unternehmen", "Klimaneutral"]
+  rss_keyword_filter: "Industrie"
+  report_topic: "Wirtschaft transformieren – Dekarbonisierung der deutschen Volkswirtschaft"

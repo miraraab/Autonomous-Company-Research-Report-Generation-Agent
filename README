@@ -33,6 +33,41 @@ pip install -r requirements.txt
 - **NewsAPI:** https://newsapi.org (free, 100 requests/day)
 - **OpenAI:** https://platform.openai.com/api-keys
 
+## Usage
+
+### Run the agent
+
+```bash
+# Default (Energiewende)
+python main.py
+
+# Specific dena topic
+python main.py --industry energiewende
+python main.py --industry gebaeude
+python main.py --industry energie_erzeugen
+python main.py --industry digitalisierung
+python main.py --industry wirtschaft
+```
+
+### Available industries
+
+| Key | Topic |
+|-----|-------|
+| `energiewende` | dena & Energiewende (default) |
+| `gebaeude` | Gebäude & Räume umbauen |
+| `energie_erzeugen` | Energie erzeugen & verteilen |
+| `digitalisierung` | Digitalisierung & Innovation |
+| `wirtschaft` | Wirtschaft transformieren |
+
+### Output
+
+Reports are saved automatically to `reports/` as Markdown files: `reports/<topic>_report_YYYY-MM-DD.md`
+
+### Add a new industry
+
+Edit `industries.yaml` and add a new entry with the keys:
+`label`, `newsapi_query`, `rss_keywords`, `rss_keyword_filter`, `report_topic`
+
 ## Run
 
 ```bash
