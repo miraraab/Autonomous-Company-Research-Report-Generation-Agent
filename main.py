@@ -320,6 +320,7 @@ def generate_audio(report_text: str, report_path: str) -> str:
         model="tts-1",
         voice="onyx",
         input=audio_input,
+        speed=1.25,
     )
     
     audio_path = report_path.replace(".md", ".mp3")
