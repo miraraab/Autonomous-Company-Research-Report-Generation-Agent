@@ -1,0 +1,63 @@
+# dena Weekly Report Agent
+
+An autonomous agent that collects current articles about the German Energy Agency (dena) on a weekly basis and generates a structured report.
+
+## Stack
+
+- **Python 3.11+**
+- **LangChain + OpenAI (GPT-4o-mini)** – Report generation
+- **NewsAPI** – Current articles (last 7 days)
+
+## Setup
+
+```bash
+# 1. Clone repository
+git clone <repo-url>
+cd dena-agent
+
+# 2. Create virtual environment
+python -m venv venv
+source venv/bin/activate  # Windows: venv\Scripts\activate
+
+# 3. Install dependencies
+pip install -r requirements.txt
+
+# 4. Set up API keys
+# Create .env file with your API keys:
+# NEWSAPI_KEY=your_key_here
+# OPENAI_API_KEY=your_key_here
+```
+
+## Get API Keys
+
+- **NewsAPI:** https://newsapi.org (free, 100 requests/day)
+- **OpenAI:** https://platform.openai.com/api-keys
+
+## Run
+
+```bash
+python main.py
+```
+
+The report will be saved to `reports/dena_report_YYYY-MM-DD.md`.
+
+## Workflow
+
+```
+Start → NewsAPI (last 7 days) → Format articles → OpenAI Report → Save as .md
+```
+
+## Project Structure
+
+```
+dena-agent/
+├── main.py           # Main agent
+├── requirements.txt
+├── .env              # Do not commit!
+├── reports/          # Generated reports
+├── docs/
+│   └── stories.md    # Agile planning
+├── skills/
+│   └── report_generation.md
+└── AGENTS.md
+```
