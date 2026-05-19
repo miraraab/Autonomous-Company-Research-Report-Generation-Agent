@@ -1,127 +1,356 @@
+"""
+Autonomous Energy Research & Report Generation Agent
+=====================================================
+Industry: Energy / Energiewende
+APIs:     1) NewsAPI       - Current news articles (last 7 days)
+          2) Tagesschau RSS - Public broadcaster feed (no key required)
+LLM:      OpenAI GPT-4o-mini via LangChain
+Output:   Structured Markdown report saved to reports/
+"""
+
 import os
+import time
+import logging
+import feedparser
 import requests
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 
+# ── Logging ────────────────────────────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%H:%M:%S",
+)
+log = logging.getLogger(__name__)
+
+# ── Config ─────────────────────────────────────────────────────────────────────
 load_dotenv()
 
-NEWSAPI_KEY = os.getenv("NEWSAPI_KEY")
+NEWSAPI_KEY    = os.getenv("NEWSAPI_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-if not NEWSAPI_KEY or not OPENAI_API_KEY:
-    raise ValueError("Fehler: NEWSAPI_KEY oder OPENAI_API_KEY nicht in .env gesetzt!")
+NEWSAPI_URL    = "https://newsapi.org/v2/everything"
+TAGESSCHAU_RSS = "https://www.tagesschau.de/xml/rss2/"
+
+MAX_RETRIES    = 3
+RETRY_BACKOFF  = 2   # seconds (doubles each attempt)
+MAX_ARTICLES   = 8   # per source
 
 
-# --- Step 1: Fetch articles from NewsAPI (last 7 days) ---
-def fetch_dena_articles():
+# ── Validation ─────────────────────────────────────────────────────────────────
+def validate_env() -> None:
+    """Fail fast if required environment variables are missing."""
+    missing = [k for k in ("NEWSAPI_KEY", "OPENAI_API_KEY") if not os.getenv(k)]
+    if missing:
+        raise EnvironmentError(
+            f"Missing environment variables: {', '.join(missing)}\n"
+            "Copy .env.example to .env and fill in your API keys."
+        )
+
+
+# ── Retry helper ───────────────────────────────────────────────────────────────
+def fetch_with_retry(url: str, params: dict, source_name: str) -> requests.Response:
+    """
+    GET request with exponential-backoff retry.
+    Raises on permanent failure after MAX_RETRIES attempts.
+    """
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            response = requests.get(url, params=params, timeout=10)
+            if response.status_code == 200:
+                return response
+            if response.status_code == 429:
+                wait = RETRY_BACKOFF ** attempt
+                log.warning(
+                    "%s – rate limited (429). Retry %d/%d in %ds …",
+                    source_name, attempt, MAX_RETRIES, wait,
+                )
+                time.sleep(wait)
+            elif response.status_code >= 500:
+                wait = RETRY_BACKOFF ** attempt
+                log.warning(
+                    "%s – server error %d. Retry %d/%d in %ds …",
+                    source_name, response.status_code, attempt, MAX_RETRIES, wait,
+                )
+                time.sleep(wait)
+            else:
+                # 4xx client error – no point retrying
+                raise ValueError(
+                    f"{source_name} returned {response.status_code}: {response.text[:200]}"
+                )
+        except requests.exceptions.Timeout:
+            wait = RETRY_BACKOFF ** attempt
+            log.warning("%s – timeout. Retry %d/%d in %ds …", source_name, attempt, MAX_RETRIES, wait)
+            time.sleep(wait)
+        except requests.exceptions.ConnectionError as exc:
+            raise ConnectionError(f"{source_name} – connection failed: {exc}") from exc
+
+    raise RuntimeError(f"{source_name} – all {MAX_RETRIES} retries exhausted.")
+
+
+# ── Article filtering ──────────────────────────────────────────────────────────
+def is_relevant(article: dict, keywords: list[str]) -> bool:
+    """Check if any keyword appears in the combined title + description text."""
+    combined_text = (article.get("title", "") + " " + article.get("description", "")).lower()
+    return any(keyword.lower() in combined_text for keyword in keywords)
+
+
+# ── Tool 1: NewsAPI ────────────────────────────────────────────────────────────
+def fetch_newsapi_articles(query: str = '"erneuerbare Energien" OR "Energiewende" OR "dena"') -> list[dict]:
+    """
+    Fetch recent German-language news articles via NewsAPI.
+    Returns a list of normalised article dicts.
+    """
     week_ago = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
 
-    response = requests.get(
-        "https://newsapi.org/v2/everything",
+    log.info("Tool 1 – NewsAPI: querying '%s' …", query)
+    response = fetch_with_retry(
+        url=NEWSAPI_URL,
         params={
-            "q": "dena Energiewende",
-            "from": week_ago,
+            "q":        query,
+            "from":     week_ago,
             "language": "de",
-            "sortBy": "publishedAt",
-            "pageSize": 10,
-            "apiKey": NEWSAPI_KEY,
+            "sortBy":   "publishedAt",
+            "pageSize": MAX_ARTICLES,
+            "apiKey":   NEWSAPI_KEY,
         },
+        source_name="NewsAPI",
     )
 
-    if response.status_code != 200:
-        raise Exception(f"NewsAPI Fehler: {response.status_code} - {response.text}")
+    raw_articles = response.json().get("articles", [])
+    if not raw_articles:
+        log.warning("NewsAPI – no articles found for query '%s'.", query)
+        return []
 
-    articles = response.json().get("articles", [])
+    articles = [
+        {
+            "source":      art.get("source", {}).get("name", "Unknown"),
+            "title":       art.get("title", ""),
+            "description": art.get("description", ""),
+            "published":   art.get("publishedAt", "")[:10],
+            "url":         art.get("url", ""),
+            "origin":      "NewsAPI",
+        }
+        for art in raw_articles
+        if art.get("title") and "[Removed]" not in art.get("title", "")
+    ]
 
-    if not articles:
-        raise Exception("Keine Artikel gefunden.")
+    keywords = ["erneuerbare Energien", "Energiewende", "dena"]
+    articles = [art for art in articles if is_relevant(art, keywords)]
 
-    print(f"{len(articles)} Artikel gefunden.")
+    log.info("NewsAPI – %d articles retrieved.", len(articles))
     return articles
 
 
-# --- Step 2: Format articles for prompt ---
-def format_articles(articles):
-    formatted = []
-    for i, article in enumerate(articles, 1):
-        title = article.get("title", "Kein Titel")
-        description = article.get("description", "Keine Beschreibung")
-        published = article.get("publishedAt", "")[:10]
-        source = article.get("source", {}).get("name", "Unbekannt")
-        formatted.append(f"{i}. [{published}] {title} (Quelle: {source})\n   {description}")
-    return "\n\n".join(formatted)
+# ── Tool 2: Tagesschau RSS ─────────────────────────────────────────────────────
+def fetch_tagesschau_articles(keywords: list[str] = None) -> list[dict]:
+    """
+    Fetch relevant entries from the Tagesschau public RSS feed.
+    Filters by keywords (case-insensitive). No API key required.
+    """
+    if keywords is None:
+        keywords = ["Energie", "Solar", "Wind", "Klimaschutz", "dena"]
+
+    log.info("Tool 2 – Tagesschau RSS: fetching feed …")
+    feed = feedparser.parse(TAGESSCHAU_RSS)
+
+    if feed.bozo and not feed.entries:
+        log.error("Tagesschau RSS – feed parse error: %s", feed.bozo_exception)
+        return []
+
+    matched = []
+    for entry in feed.entries:
+        article = {
+            "source":      "Tagesschau",
+            "title":       entry.get("title", ""),
+            "description": entry.get("summary", ""),
+            "published":   entry.get("published", "")[:10],
+            "url":         entry.get("link", ""),
+            "origin":      "Tagesschau RSS",
+        }
+        if is_relevant(article, keywords):
+            matched.append(article)
+        if len(matched) >= MAX_ARTICLES:
+            break
+
+    if not matched:
+        log.warning("Tagesschau RSS – no entries matched keywords %s.", keywords)
+
+    log.info("Tagesschau RSS – %d articles retrieved.", len(matched))
+    return matched
 
 
-# --- Step 3: Generate report with OpenAI via LangChain ---
-def generate_report(articles_text):
+# ── Data merging & formatting ──────────────────────────────────────────────────
+def merge_and_deduplicate(source_a: list[dict], source_b: list[dict]) -> list[dict]:
+    """Merge two article lists and remove duplicates by title similarity."""
+    combined = source_a + source_b
+    seen_titles: set[str] = set()
+    unique = []
+    for art in combined:
+        key = art["title"].lower()[:60]
+        if key not in seen_titles:
+            seen_titles.add(key)
+            unique.append(art)
+    log.info("Merged sources – %d unique articles total.", len(unique))
+    return unique
+
+
+def format_articles_for_prompt(articles: list[dict]) -> str:
+    """Convert article list to a structured text block for the LLM prompt."""
+    lines = []
+    for i, art in enumerate(articles, 1):
+        lines.append(
+            f"{i}. [{art['published']}] {art['title']}\n"
+            f"   Quelle: {art['source']} ({art['origin']})\n"
+            f"   {art['description']}\n"
+            f"   URL: {art['url']}"
+        )
+    return "\n\n".join(lines)
+
+
+# ── Tool 3: LangChain / OpenAI report generation ───────────────────────────────
+def generate_report(articles_text: str, topic: str = "dena & Energiewende") -> str:
+    """
+    Use LangChain + GPT-4o-mini to synthesise a structured German report
+    from the provided article summaries.
+    """
+    log.info("LangChain – generating report …")
+
     llm = ChatOpenAI(
         model="gpt-4o-mini",
         api_key=OPENAI_API_KEY,
         temperature=0.3,
+        max_tokens=1500,
     )
 
-    prompt = f"""
-Du bist ein Energiewende-Analyst. Basierend auf den folgenden aktuellen Artikeln der letzten 7 Tage,
-erstelle einen strukturierten deutschen Report über die Deutsche Energie-Agentur (dena) und die Energiewende.
+    system_msg = SystemMessage(content=(
+        "Du bist ein erfahrener Energiewende-Analyst. "
+        "Du analysierst aktuelle Medienberichte sachlich und präzise. "
+        "Deine Reports sind klar strukturiert, faktenbasiert und auf Deutsch verfasst. "
+        "Erfinde keine Informationen – stütze dich ausschließlich auf die gegebenen Artikel."
+    ))
 
-ARTIKEL:
+    user_msg = HumanMessage(content=f"""
+Analysiere die folgenden aktuellen Artikel über das Thema „{topic}" und erstelle einen strukturierten Wochenreport.
+
+ARTIKEL (Quellen: NewsAPI & Tagesschau RSS):
 {articles_text}
 
-Erstelle einen Report mit folgender Struktur:
+Erstelle einen Report mit exakt dieser Struktur:
 
-# dena Weekly Report – {datetime.now().strftime("%d.%m.%Y")}
+# Energiewende Weekly Report – {datetime.now().strftime("%d.%m.%Y")}
+**Thema:** {topic}
+**Quellen:** NewsAPI, Tagesschau RSS
+**Artikel analysiert:** {articles_text.count(chr(10)+chr(10)) + 1}
 
-## Zusammenfassung
-(2-3 Sätze zu den wichtigsten Entwicklungen der Woche)
+---
 
-## Aktuelle Themen
-(3-5 Kernthemen mit je 2-3 Sätzen)
+## 1. Zusammenfassung
+(3–4 Sätze: Die wichtigsten Entwicklungen der Woche auf einen Blick)
 
-## Trends & Ausblick
-(Was entwickelt sich gerade, was ist zu erwarten?)
+## 2. Kernthemen der Woche
+(3–5 Themen. Für jedes Thema: Titel, 2–3 Sätze Analyse, Relevanz)
 
-## Quellen
-(Liste der verwendeten Artikel)
+## 3. Trends & Marktentwicklung
+(Was sind aktuelle Richtungen, politische Signale oder technologische Entwicklungen?)
 
-Schreibe präzise, sachlich und auf Deutsch.
-"""
+## 4. Risiken & Herausforderungen
+(Welche Hindernisse oder Kontroversen tauchen in den Berichten auf?)
 
-    response = llm.invoke([HumanMessage(content=prompt)])
-    return response.content
+## 5. Ausblick
+(Was ist in den nächsten Wochen zu erwarten?)
+
+## 6. Quellenverzeichnis
+(Nummerierte Liste aller verwendeten Artikel mit Quelle und Datum)
+
+Schreibe präzise, sachlich und professionell.
+""")
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            response = llm.invoke([system_msg, user_msg])
+            log.info("LangChain – report generated successfully.")
+            return response.content
+        except Exception as exc:
+            wait = RETRY_BACKOFF ** attempt
+            log.warning("LLM error (attempt %d/%d): %s. Retrying in %ds …", attempt, MAX_RETRIES, exc, wait)
+            time.sleep(wait)
+
+    raise RuntimeError(f"LLM report generation failed after {MAX_RETRIES} attempts.")
 
 
-# --- Step 4: Save report as .md file ---
-def save_report(report_text):
+# ── Output ─────────────────────────────────────────────────────────────────────
+def save_report(report_text: str, topic: str = "energiewende") -> str:
+    """Save the report as a Markdown file in the reports/ directory."""
     os.makedirs("reports", exist_ok=True)
-    filename = f"reports/dena_report_{datetime.now().strftime('%Y-%m-%d')}.md"
+    slug = topic.lower().replace(" ", "_").replace("/", "-")[:30]
+    filename = f"reports/{slug}_report_{datetime.now().strftime('%Y-%m-%d')}.md"
     with open(filename, "w", encoding="utf-8") as f:
         f.write(report_text)
-    print(f"Report gespeichert: {filename}")
+    log.info("Report saved → %s", filename)
     return filename
 
 
-# --- Main ---
-def run_agent():
-    print("Agent gestartet...")
+# ── Orchestration ──────────────────────────────────────────────────────────────
+def run_agent(
+    newsapi_query: str = '"erneuerbare Energien" OR "Energiewende" OR "dena"',
+    rss_keywords:  list[str] = None,
+    report_topic:  str = "dena & Energiewende",
+) -> str:
+    """
+    Full autonomous pipeline:
+      1. Validate environment
+      2. Fetch articles from NewsAPI       (Tool 1)
+      3. Fetch articles from Tagesschau RSS (Tool 2)
+      4. Merge & deduplicate results
+      5. Generate structured report via LangChain (Tool 3 / LLM)
+      6. Save report to disk
+    Returns the path to the saved report file.
+    """
+    if rss_keywords is None:
+        rss_keywords = ["Energie", "Solar", "Wind", "Klimaschutz", "dena"]
 
-    print("Schritt 1: Artikel abrufen...")
-    articles = fetch_dena_articles()
+    log.info("═══ Agent started ═══")
 
-    print("Schritt 2: Artikel formatieren...")
-    articles_text = format_articles(articles)
+    # Step 0 – environment check
+    validate_env()
 
-    print("Schritt 3: Report generieren...")
-    report = generate_report(articles_text)
+    # Step 1 – Tool 1: NewsAPI
+    newsapi_articles = fetch_newsapi_articles(query=newsapi_query)
 
-    print("Schritt 4: Report speichern...")
-    filename = save_report(report)
+    # Step 2 – Tool 2: Tagesschau RSS
+    tagesschau_articles = fetch_tagesschau_articles(keywords=rss_keywords)
 
-    print(f"\nFertig! Report: {filename}")
-    print("\n--- REPORT VORSCHAU ---")
-    print(report[:500] + "...")
+    # Step 3 – merge
+    if not newsapi_articles and not tagesschau_articles:
+        raise RuntimeError("No articles retrieved from either source. Cannot generate report.")
+
+    all_articles = merge_and_deduplicate(newsapi_articles, tagesschau_articles)
+    articles_text = format_articles_for_prompt(all_articles)
+
+    # Step 4 – report generation
+    report = generate_report(articles_text, topic=report_topic)
+
+    # Step 5 – save
+    filepath = save_report(report, topic=report_topic)
+
+    log.info("═══ Agent finished → %s ═══", filepath)
+
+    # Preview
+    print("\n" + "─" * 60)
+    print(report[:600] + "\n…")
+    print("─" * 60)
+
+    return filepath
 
 
+# ── Entry point ────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    run_agent()
+    run_agent(
+        newsapi_query='"erneuerbare Energien" OR "Energiewende" OR "dena"',
+        rss_keywords=["Energie", "Solar", "Wind", "Klimaschutz", "dena"],
+        report_topic="dena & Energiewende",
+    )
