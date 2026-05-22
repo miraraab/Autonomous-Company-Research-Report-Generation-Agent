@@ -168,6 +168,13 @@ Tool 4: Resend API → email with MP3 attachment → RECIPIENT_EMAIL
               │  → RECIPIENT_EMAIL      │
               └─────────────────────────┘
 ```
+## Decision Decisions
+
+**Why LangChain (not raw API calls):**
+LangChain provides structured message management (SystemMessage, HumanMessage) and a clean abstraction layer that makes the prompt logic maintainable and extensible — for example, adding memory or chaining steps in a future version.
+
+**Why not LangGraph:**
+The workflow is linear and predictable: fetch → synthesise → audio → email. There are no branching decisions that require dynamic routing between nodes. LangGraph would add complexity without adding value for this use case.
 
 ## Deployment (Railway)
 
