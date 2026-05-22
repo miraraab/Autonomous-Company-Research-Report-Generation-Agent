@@ -18,6 +18,7 @@ import feedparser
 import requests
 import openai
 import resend
+from collections import Counter
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
@@ -94,7 +95,6 @@ def fetch_with_retry(url: str, params: dict, source_name: str) -> requests.Respo
                 )
                 time.sleep(wait)
             else:
-                # 4xx client error – no point retrying
                 raise ValueError(
                     f"{source_name} returned {response.status_code}: {response.text[:200]}"
                 )
@@ -110,13 +110,54 @@ def fetch_with_retry(url: str, params: dict, source_name: str) -> requests.Respo
 
 # ── Article filtering ──────────────────────────────────────────────────────────
 def is_relevant(article: dict, keywords: list[str]) -> bool:
-    """Check if any keyword word appears in the combined title + description text."""
-    combined_text = (article.get("title", "") + " " + article.get("description", "")).lower()
-    # Split keywords into individual words for flexible matching
+    """Check if any keyword appears in the combined title + description text."""
+    combined_text = (article.get("title", "") + " " + (article.get("description") or "")).lower()
     words = []
     for kw in keywords:
         words.extend(kw.lower().split())
     return any(word in combined_text for word in words)
+
+
+# ── Frequency scoring ──────────────────────────────────────────────────────────
+def score_by_frequency(articles: list[dict], top_n: int = 5) -> list[dict]:
+    """
+    Score articles by keyword frequency across all titles.
+    Articles whose keywords appear most often across the full set
+    are considered most relevant — journalistically validated approach.
+    Returns top_n articles sorted by relevance score.
+    """
+    stopwords = {"und", "der", "die", "das", "in", "von", "mit", "für", "auf", "an",
+                 "ist", "es", "im", "bei", "nach", "aus", "als", "auch", "nicht", "sich"}
+
+    # Count keyword frequency across all titles
+    all_words = []
+    for art in articles:
+        words = [
+            w.lower().strip(".,:-()[]")
+            for w in art["title"].split()
+            if len(w) > 4 and w.lower() not in stopwords
+        ]
+        all_words.extend(words)
+
+    keyword_counts = Counter(all_words)
+
+    # Score each article: sum of frequency of its title words
+    def article_score(article: dict) -> int:
+        words = [
+            w.lower().strip(".,:-()[]")
+            for w in article["title"].split()
+            if len(w) > 4 and w.lower() not in stopwords
+        ]
+        return sum(keyword_counts[w] for w in words if keyword_counts[w] > 1)
+
+    scored = sorted(articles, key=article_score, reverse=True)
+    top = scored[:top_n]
+
+    log.info(
+        "Frequency scoring – top %d articles selected from %d total.",
+        len(top), len(articles)
+    )
+    return top
 
 
 # ── Tool 1: NewsAPI ────────────────────────────────────────────────────────────
@@ -159,7 +200,7 @@ def fetch_newsapi_articles(query: str = '"erneuerbare Energien" OR "Energiewende
         if art.get("title") and "[Removed]" not in art.get("title", "")
     ]
 
-    keywords = ["Energie", "Solar", "Wind", "Klimaschutz", "dena"]  # Broad energy-related keywords
+    keywords = ["Energie", "Solar", "Wind", "Klimaschutz", "dena"]
     articles = [art for art in articles if is_relevant(art, keywords)]
 
     log.info("NewsAPI – %d articles retrieved.", len(articles))
@@ -313,20 +354,21 @@ def save_report(report_text: str, topic: str = "energiewende") -> str:
     log.info("Report saved → %s", filename)
     return filename
 
+
 def generate_audio(report_text: str, report_path: str) -> str:
     """Convert report text to MP3 audio via OpenAI TTS."""
     client = openai.OpenAI(api_key=OPENAI_API_KEY)
-    
+
     # Trim to ~4000 chars (approx 7 minutes spoken)
     audio_input = report_text[:4000]
-    
+
     response = client.audio.speech.create(
         model="tts-1",
         voice="onyx",
         input=audio_input,
         speed=1.25,
     )
-    
+
     audio_path = report_path.replace(".md", ".mp3")
     response.stream_to_file(audio_path)
     log.info("Audio saved → %s", audio_path)
@@ -338,14 +380,14 @@ def send_email(audio_path: str, report_topic: str) -> None:
     resend.api_key = os.getenv("RESEND_API_KEY", "").strip()
     log.info("Resend Key geladen: %s...", resend.api_key[:8])
     recipient = os.getenv("RECIPIENT_EMAIL")
-    
+
     if not resend.api_key or not recipient:
         log.warning("Resend not configured – skipping email.")
         return
-    
+
     with open(audio_path, "rb") as f:
         audio_bytes = f.read()
-    
+
     resend.Emails.send({
         "from": "onboarding@resend.dev",
         "to": recipient,
@@ -359,7 +401,6 @@ def send_email(audio_path: str, report_topic: str) -> None:
     log.info("Email sent → %s", recipient)
 
 
-
 # ── Orchestration ──────────────────────────────────────────────────────────────
 def run_agent(
     newsapi_query: str = '"erneuerbare Energien" OR "Energiewende" OR "dena"',
@@ -369,11 +410,14 @@ def run_agent(
     """
     Full autonomous pipeline:
       1. Validate environment
-      2. Fetch articles from NewsAPI       (Tool 1)
-      3. Fetch articles from Tagesschau RSS (Tool 2)
+      2. Fetch articles from NewsAPI          (Tool 1)
+      3. Fetch articles from Tagesschau RSS   (Tool 2)
       4. Merge & deduplicate results
-      5. Generate structured report via LangChain (Tool 3 / LLM)
-      6. Save report to disk
+      5. Score by frequency → top 5 articles  (relevance filter)
+      6. Generate structured report via LangChain (Tool 3 / LLM)
+      7. Save report to disk
+      8. Generate audio via OpenAI TTS        (Tool 4)
+      9. Send email via Resend                (Tool 5)
     Returns the path to the saved report file.
     """
     log.info("═══ Agent started ═══")
@@ -393,7 +437,7 @@ def run_agent(
         raise RuntimeError("No articles retrieved from either source. Cannot generate report.")
 
     all_articles = merge_and_deduplicate(newsapi_articles, tagesschau_articles)
-    
+
     # Agent decision: evaluate source quality
     if len(all_articles) < 3:
         log.warning("Agent: insufficient articles (%d). Retrying NewsAPI with broader query...", len(all_articles))
@@ -403,29 +447,34 @@ def run_agent(
     if len(all_articles) == 0:
         raise RuntimeError("Agent: no articles from any source after fallback. Aborting.")
 
-    log.info("Agent decision: proceeding with %d articles from %d sources",
-             len(all_articles),
-             len(set(a['origin'] for a in all_articles)))
+    log.info(
+        "Agent decision: proceeding with %d articles from %d sources",
+        len(all_articles),
+        len(set(a['origin'] for a in all_articles))
+    )
+
+    # Step 4 – frequency scoring → top 5 most relevant articles
+    all_articles = score_by_frequency(all_articles, top_n=5)
 
     articles_text = format_articles_for_prompt(all_articles)
 
-    # Step 4 – report generation
+    # Step 5 – report generation
     report = generate_report(articles_text, topic=report_topic)
 
-    # Agent decision: validate report completeness after generation
+    # Agent decision: validate report completeness
     required_sections = ["Zusammenfassung", "Kernthemen", "Trends", "Risiken", "Ausblick"]
     missing = [s for s in required_sections if s not in report]
     if missing:
         log.warning("Agent: report incomplete, missing sections: %s. Regenerating...", missing)
         report = generate_report(articles_text, topic=report_topic)
 
-    # Step 5 – save
+    # Step 6 – save
     filepath = save_report(report, topic=report_topic)
 
-    # Step 6 – audio generation
+    # Step 7 – audio generation
     audio_path = generate_audio(report, filepath)
 
-    # Step 7 – email delivery
+    # Step 8 – email delivery
     send_email(audio_path, report_topic)
 
     log.info("═══ Agent finished → %s ═══", filepath)
