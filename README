@@ -1,12 +1,16 @@
 # dena Weekly Report Agent
 
-An autonomous agent that collects current articles about the German Energy Agency (dena) on a weekly basis and generates a structured report.
+An autonomous agent that collects current articles about the German Energy Agency (dena) on a weekly basis, generates a structured report, converts it to audio, and delivers it via email — fully automated via Railway Cron.
 
 ## Stack
 
 - **Python 3.11+**
 - **LangChain + OpenAI (GPT-4o-mini)** – Report generation
 - **NewsAPI** – Current articles (last 7 days)
+- **Tagesschau RSS** – Second news source (no API key required)
+- **OpenAI TTS** – Audio report (voice: Onyx, speed: 1.25x)
+- **Resend API** – Email delivery with MP3 attachment
+- **Railway** – Cloud deployment & weekly Cron (Mon 06:30 CET)
 
 ## Setup
 
@@ -23,15 +27,24 @@ source venv/bin/activate  # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 
 # 4. Set up API keys
-# Create .env file with your API keys:
-# NEWSAPI_KEY=your_key_here
-# OPENAI_API_KEY=your_key_here
+cp .env.example .env
+# Fill in your keys in .env
+```
+
+## Environment Variables
+
+```bash
+NEWSAPI_KEY=your_key_here
+OPENAI_API_KEY=your_key_here
+RESEND_API_KEY=your_key_here
+RECIPIENT_EMAIL=your_email_here
 ```
 
 ## Get API Keys
 
 - **NewsAPI:** https://newsapi.org (free, 100 requests/day)
 - **OpenAI:** https://platform.openai.com/api-keys
+- **Resend:** https://resend.com (free, 100 emails/day)
 
 ## Usage
 
@@ -61,25 +74,21 @@ python main.py --industry wirtschaft
 
 ### Output
 
-Reports are saved automatically to `reports/` as Markdown files: `reports/<topic>_report_YYYY-MM-DD.md`
+Reports are saved automatically to `reports/` as Markdown and MP3 files:
+- `reports/<topic>_report_YYYY-MM-DD.md`
+- `reports/<topic>_report_YYYY-MM-DD.mp3`
+
+A copy is also delivered via email to `RECIPIENT_EMAIL`.
 
 ### Add a new industry
 
 Edit `industries.yaml` and add a new entry with the keys:
 `label`, `newsapi_query`, `rss_keywords`, `rss_keyword_filter`, `report_topic`
 
-## Run
-
-```bash
-python main.py
-```
-
-The report will be saved to `reports/dena_report_YYYY-MM-DD.md`.
-
 ## Workflow
 
 ```
-Trigger (python main.py --industry <topic>)
+Trigger (Railway Cron: Mon 06:30 CET / manual: python main.py)
 ↓
 Load industry config from industries.yaml
 ↓
@@ -87,21 +96,20 @@ Tool 1: NewsAPI (keyword query, last 7 days)
 Tool 2: Tagesschau RSS (keyword filter, no key required)
 ↓
 Agent Decision Layer:
-
-< 3 articles? → retry with broader query
-0 articles? → abort with error
-log article count and source count
+  < 3 articles? → retry with broader query
+  0 articles?   → abort with error
+  log article count and source count
 ↓
 LangChain + GPT-4o-mini → structured German report
 ↓
 Validate report sections (Zusammenfassung, Kernthemen, Trends, Risiken, Ausblick)
-missing sections? → regenerate
+  missing sections? → regenerate
 ↓
 Save Markdown report → reports/<topic>_report_YYYY-MM-DD.md
 ↓
-OpenAI TTS → MP3 audio (speed 1.25x, voice onyx)
+Tool 3: OpenAI TTS → MP3 audio (speed 1.25x, voice onyx)
 ↓
-Resend API → email with MP3 attachment
+Tool 4: Resend API → email with MP3 attachment → RECIPIENT_EMAIL
 ```
 
 ## Architecture
@@ -142,24 +150,75 @@ Resend API → email with MP3 attachment
               └────────────┬────────────┘
                            │
               ┌────────────▼────────────┐
+              │  Save Markdown Report   │
               │  reports/<topic>_       │
               │  report_YYYY-MM-DD.md   │
+              └────────────┬────────────┘
+                           │
+              ┌────────────▼────────────┐
+              │  Tool 3: OpenAI TTS     │
+              │  - voice: onyx          │
+              │  - speed: 1.25x         │
+              │  - save .mp3            │
+              └────────────┬────────────┘
+                           │
+              ┌────────────▼────────────┐
+              │  Tool 4: Resend API     │
+              │  - email + MP3 attached │
+              │  → RECIPIENT_EMAIL      │
               └─────────────────────────┘
 ```
+
+## Deployment (Railway)
+
+The agent runs automatically every Monday at 06:30 CET via Railway Cron.
+
+- **Cron Schedule:** `30 4 * * 1` (UTC)
+- **Manual trigger:** Railway Dashboard → Deployments → Redeploy
+- **Environment variables:** Set in Railway Dashboard → Variables
 
 ## Project Structure
 
 ```
 dena-agent/
-├── main.py               # Autonomous agent
-├── industries.yaml       # Industry configs (5 dena topics)
+├── main.py                  # Autonomous agent
+├── industries.yaml          # Industry configs (5 dena topics)
 ├── requirements.txt
-├── .env                  # Do not commit!
+├── railway.toml             # Railway deploy config
+├── .env                     # Do not commit!
 ├── .env.example
-├── reports/              # Generated reports + audio
+├── AGENTS.md                # Agent instructions
+├── reports/                 # Generated reports + audio (gitignored)
 ├── docs/
-│   └── stories.md        # Agile planning
-├── skills/
-│   └── report_generation.md
-└── AGENTS.md
+│   └── stories.md           # Agile planning artifacts
+└── skills/
+    └── report_generation.md # Reusable skill documentation
 ```
+
+## Sample Reports
+
+Two example reports are included in `reports/`:
+
+- `dena_&_energiewende_report_2026-05-19.md` – Energy transition weekly briefing
+- `gebäude_&_räume_umbauen_–_tran_report_2026-05-19.md` – Buildings & retrofit weekly briefing
+
+## Error Handling
+
+| Scenario | Behavior |
+|----------|----------|
+| NewsAPI returns 0 articles | Retry with broader query, abort if still 0 |
+| Tagesschau RSS unreachable | Log warning, continue with NewsAPI only |
+| LangChain timeout | Retry once before raising exception |
+| Missing report sections | Regenerate report automatically |
+| Resend delivery failure | Log error with status code |
+| Missing env variables | Raise descriptive error on startup |
+
+## API Costs & Limits
+
+| API | Free Tier | Estimated Cost/Run |
+|-----|-----------|-------------------|
+| NewsAPI | 100 req/day | ~1 request |
+| OpenAI GPT-4o-mini | Pay-per-use | ~$0.01 |
+| OpenAI TTS | Pay-per-use | ~$0.05 |
+| Resend | 100 emails/day | Free |
+| Railway | $5 credit/month | Minimal |

@@ -1,5 +1,3 @@
 [deploy]
 startCommand = "python main.py"
 
-[cron]
-schedule = "30 4 * * 1"

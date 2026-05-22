@@ -1,5 +1,18 @@
 # AGENTS.md
 
+## Project Specification
+
+**Goal:** Build an autonomous agent that monitors dena-relevant energy topics weekly,
+synthesises findings from multiple news sources, and delivers a structured German
+report as Markdown and audio to a defined recipient.
+
+**Trigger:** Manual CLI command or scheduled execution
+**Input:** Industry topic key (e.g. "energiewende", "gebaeude")
+**Output:** Markdown report + MP3 audio file + email delivery
+**Autonomy:** Fully autonomous after trigger — no human intervention required
+
+---
+
 ## Agent: dena Weekly Report Agent
 
 ## Task
@@ -53,3 +66,15 @@ Markdown report with:
 - 0 articles → RuntimeError with clear message
 - LLM errors → retry up to 3 times
 - Email errors → logged as warning, agent continues
+## Agent-Delegated Tasks
+
+The following tasks were delegated to the agent during development:
+
+| Task | Tool Used | Definition of Done |
+|------|-----------|-------------------|
+| Generate weekly energy report | LangChain + GPT-4o-mini | Report contains all 5 sections, valid German |
+| Fetch and filter news articles | NewsAPI + Tagesschau RSS | Min. 1 article per source returned |
+| Convert report to audio | OpenAI TTS | MP3 file saved, size > 0 bytes |
+| Deliver report by email | Resend API | Email received at RECIPIENT_EMAIL |
+
+Human review step: Report quality checked manually before activating Railway Cron schedule.
